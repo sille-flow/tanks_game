@@ -152,7 +152,7 @@ void draw_tank(const tanks::Tank& tank) {
 
 void draw_hud(const tanks::Court& court) {
   DrawRectangle(0, 0, kWindowWidth, kHudHeight, Color{28, 30, 36, 255});
-  DrawText("1200 Tanks — Local Coop", 12, 10, 18, RAYWHITE);
+  DrawText("Local Coop", 12, 10, 18, RAYWHITE);
   DrawText(court.status().c_str(), 12, 34, 16, LIGHTGRAY);
 
   const int h1 = court.player1().health();
@@ -183,7 +183,7 @@ void draw_court(const tanks::Court& court) {
 
 int main() {
   SetTraceLogLevel(LOG_WARNING);
-  InitWindow(kWindowWidth, kWindowHeight, "1200 Tanks — Local Coop");
+  InitWindow(kWindowWidth, kWindowHeight, "Local Coop");
   SetTargetFPS(60);
 
   tanks::Court court;

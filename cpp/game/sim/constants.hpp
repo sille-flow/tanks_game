@@ -11,7 +11,7 @@ constexpr int TANK_SPEED = 4;
 constexpr int TANK_MAX_HEALTH = 100;
 
 constexpr int BULLET_SIZE = 20;
-constexpr int BULLET_SPEED = 4;
+constexpr int BULLET_SPEED = 8;
 
 enum class Direction { None, Up, Down, Left, Right };
 

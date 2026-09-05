@@ -20,6 +20,16 @@ set(GAME_SIM_SOURCES
 add_library(tanks_sim STATIC ${GAME_SIM_SOURCES})
 target_include_directories(tanks_sim PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/game")
 
+# Headless RL env (no pybind). Always available for tests / future ONNX play.
+add_library(tanks_rl STATIC rl/rl-environment.cpp)
+target_link_libraries(tanks_rl PUBLIC tanks_sim)
+target_include_directories(tanks_rl PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/game"
+)
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 # --- Raylib (optional client; find_package / RAYLIB_ROOT / local tree — no FetchContent) ---
 set(GS_HAS_RAYLIB FALSE)
 
@@ -112,22 +122,53 @@ if(BUILD_WEBSERVER)
   target_link_libraries(webserver PRIVATE Threads::Threads Boost::system)
 endif()
 
-# --- Optional RL module (pybind11; paths fixed for later enablement) ---
+# --- Optional Python bindings (pybind11) ---
 if(BUILD_RL)
   find_package(Python COMPONENTS Interpreter Development REQUIRED)
-  find_package(pybind11 CONFIG REQUIRED)
-  pybind11_add_module(tanks_env_cpp
-    rl/rl-bindings.cpp
-    rl/rl-environment.cpp
-    ${GAME_SIM_SOURCES}
-  )
-  target_include_directories(tanks_env_cpp PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/game"
+  #find_package(pybind11 CONFIG REQUIRED)
+  set(Python_FIND_VIRTUALENV FIRST)
+
+  find_package(Python COMPONENTS Interpreter Development REQUIRED)
+
+  # First try a normal system/package-manager installation.
+  find_package(pybind11 CONFIG QUIET)
+
+  # If pybind11 is not on CMake's search path, ask the selected Python
+  # installation where its pybind11 CMake package lives.
+  if(NOT pybind11_FOUND)
+    execute_process(
+      COMMAND "${Python_EXECUTABLE}" -m pybind11 --cmakedir
+      RESULT_VARIABLE PYBIND11_RESULT
+      OUTPUT_VARIABLE PYBIND11_CMAKE_DIR
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+    )
+
+    if(PYBIND11_RESULT EQUAL 0 AND EXISTS "${PYBIND11_CMAKE_DIR}")
+      #message(STATUS "pybind11 found at ${PYBIND11_CMAKE_DIR}")
+      set(pybind11_DIR "${PYBIND11_CMAKE_DIR}")
+
+      find_package(pybind11 CONFIG REQUIRED)
+    else()
+      message(FATAL_ERROR
+        "pybind11 was not found.\n"
+        "Install it in the Python environment being used by CMake:\n"
+        "  ${Python_EXECUTABLE} -m pip install pybind11"
+      )
+    endif()
+  endif()
+
+  #message(STATUS "Using Python: ${Python_EXECUTABLE}")
+  #message(STATUS "Using pybind11: ${pybind11_DIR}")
+  pybind11_add_module(tanks_env_cpp rl/rl-bindings.cpp)
+  target_link_libraries(tanks_env_cpp PRIVATE tanks_rl)
+  set_target_properties(tanks_env_cpp PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../python"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../python"
   )
 endif()
 
-# --- Unit tests (headless sim only; no third-party test framework) ---
+# --- Unit tests (headless sim + RL env; no third-party test framework) ---
 if(BUILD_TESTING)
   enable_testing()
   add_executable(tanks_tests
@@ -136,8 +177,9 @@ if(BUILD_TESTING)
     tests/test_tank.cpp
     tests/test_bullet.cpp
     tests/test_court.cpp
+    tests/test_rl_environment.cpp
   )
-  target_link_libraries(tanks_tests PRIVATE tanks_sim)
+  target_link_libraries(tanks_tests PRIVATE tanks_sim tanks_rl)
   target_include_directories(tanks_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
   add_test(NAME tanks_tests COMMAND tanks_tests)
 endif()
