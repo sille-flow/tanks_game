@@ -18,7 +18,10 @@ from pathlib import Path
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
 
+from onnx_export import export_policy_to_onnx, print_summary
+
 import tanks_env_cpp
+
 from rl_config import (
     DIFFICULTY_MODES,
     build_arg_parser,
@@ -88,6 +91,41 @@ def main(argv: list[str] | None = None) -> None:
     print("Training complete.")
     print(f"Model saved to {save_path}")
     print(f"Hyperparams saved to {meta_path}")
+    onnx_path = output_path / f"{hp.model_name}.onnx"
+    print()
+    print(f"Exporting policy to ONNX ({onnx_path}) ...")
+    try:
+        summary = export_policy_to_onnx(model, onnx_path, opset=17, verify=True)
+        print_summary(summary)
+
+        # Fail loudly rather than silently shipping a mismatched model —
+        # a shape mismatch here means the C++ side's RLPolicy constructor
+        # will reject the file anyway, but it's cheaper to catch it now.
+        # rl-bindings.cpp exposes these as module-level attributes:
+        #   m.attr("ACTION_COUNT") = tanks::RLEnvironment::ACTION_COUNT;
+        #   m.attr("OBSERVATION_SIZE") = tanks::RLEnvironment::OBSERVATION_SIZE;
+        if summary.observation_size != tanks_env_cpp.OBSERVATION_SIZE:
+            print(
+                f"WARNING: exported observation_size={summary.observation_size} "
+                f"!= tanks_env_cpp.OBSERVATION_SIZE={tanks_env_cpp.OBSERVATION_SIZE}. "
+                "The C++ RLPolicy will refuse to load this file."
+            )
+        if (
+            summary.action_kind == "discrete"
+            and summary.action_output_size != tanks_env_cpp.ACTION_COUNT
+        ):
+            print(
+                f"WARNING: exported action_output_size={summary.action_output_size} "
+                f"!= tanks_env_cpp.ACTION_COUNT={tanks_env_cpp.ACTION_COUNT}. "
+                "The C++ RLPolicy will refuse to load this file."
+            )
+    except ValueError as e:
+        # Don't let a bad export nuke an otherwise-successful training run —
+        # the .zip checkpoint above is already safely saved. Re-export later
+        # with export_ppo_to_onnx.py once fixed.
+        print(f"WARNING: ONNX export failed, but the .zip checkpoint was saved fine: {e}")
+
+    print()
     print("Play-mode registry (fill checkpoints as you go):")
     print(json.dumps(DIFFICULTY_MODES, indent=2))
 

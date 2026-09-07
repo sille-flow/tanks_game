@@ -20,3 +20,13 @@ To compile and train a model, ensure a python venv is active and run these comma
  - cd python
  - python -m unittest test_rl_config.py
  - python rl-learning.py --opponent-difficulty Easy --learning-rate 1e-3 --net-arch 64,64 --total-timesteps 50000 --model-name tank_ppo_easy
+
+ To compile and train a model for local single player, ensure a python venv is active and run these commands:
+  - python -m pip install onnx onnxruntime
+  - *Download ONNX Runtime from https://github.com/microsoft/onnxruntime/releases*
+  - cmake -B build/build-inference -S cpp -DCMAKE_BUILD_TYPE=Release -DBUILD_RL=ON -DBUILD_ONNX_INFERENCE=ON -DONNXRUNTIME_ROOT_DIR="your onnxruntime path"
+  - cmake --build build/build-inference --target gs tanks_env_cpp
+  - cd python
+  - python rl-learning.py
+  - *If on Windows, copy onnxruntime.dll from "your onnxruntime path"\lib\onnxruntime.dll into GameServer/bin*
+  - .\bin\gs.exe --vs-rl python\models\tanks_ppo.onnx

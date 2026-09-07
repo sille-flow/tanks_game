@@ -34,7 +34,7 @@ PYBIND11_MODULE(tanks_env_cpp, m) {
       .def("observation", &tanks::RLEnvironment::observation)
       .def("reward", &tanks::RLEnvironment::reward)
       .def("done", &tanks::RLEnvironment::done)
-      .def("decode_action", &tanks::RLEnvironment::decode_action,
+      .def_static("decode_action", &tanks::RLEnvironment::decode_action,
            py::arg("action"))
       .def("set_opponent_config", &tanks::RLEnvironment::set_opponent_config,
            py::arg("config"));

@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(BUILD_CLIENT "Build the raylib graphical client (gs)" ON)
 option(BUILD_WEBSERVER "Build the Boost.Beast websocket echo server" OFF)
 option(BUILD_RL "Build the pybind11 RL module" OFF)
+option(BUILD_ONNX_INFERENCE "Build the ONNX Runtime C++ RL inference module" OFF)
 option(BUILD_TESTING "Build unit tests" ON)
 
 # --- Transport-agnostic simulation core (no raylib) ---
@@ -21,6 +22,10 @@ add_library(tanks_sim STATIC ${GAME_SIM_SOURCES})
 target_include_directories(tanks_sim PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/game")
 
 # Headless RL env (no pybind). Always available for tests / future ONNX play.
+# gs links this unconditionally too (see BUILD_CLIENT block below) — it's a
+# small, ONNX-Runtime-free static lib providing RLEnvironment::decode_action
+# and RLEnvironment::build_observation, which the --vs-rl game mode needs
+# regardless of whether ONNX inference itself is enabled for this build.
 add_library(tanks_rl STATIC rl/rl-environment.cpp)
 target_link_libraries(tanks_rl PUBLIC tanks_sim)
 target_include_directories(tanks_rl PUBLIC
@@ -28,7 +33,7 @@ target_include_directories(tanks_rl PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/game"
 )
 
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../bin")
 
 # --- Raylib (optional client; find_package / RAYLIB_ROOT / local tree — no FetchContent) ---
 set(GS_HAS_RAYLIB FALSE)
@@ -109,7 +114,12 @@ endif()
 
 if(BUILD_CLIENT AND GS_HAS_RAYLIB)
   add_executable(gs game/main.cpp)
-  target_link_libraries(gs PRIVATE tanks_sim raylib)
+  # tanks_rl is always built (see above) and has no ONNX Runtime dependency
+  # of its own, so gs can always link it — this gives the client
+  # RLEnvironment::decode_action / build_observation for the --vs-rl mode's
+  # action-decoding and observation-building, independent of whether ONNX
+  # inference itself (tanks_rl_inference) is enabled for this build.
+  target_link_libraries(gs PRIVATE tanks_sim tanks_rl raylib)
 elseif(BUILD_CLIENT AND NOT GS_HAS_RAYLIB)
   message(STATUS "BUILD_CLIENT=ON but raylib unavailable — gs not built")
 endif()
@@ -167,6 +177,128 @@ if(BUILD_RL)
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../python"
   )
 endif()
+
+if(BUILD_ONNX_INFERENCE)
+ 
+  # --- Step 1: normal package discovery (vcpkg / Conan / distro package) ---
+  find_package(onnxruntime CONFIG QUIET)
+ 
+  if(onnxruntime_FOUND)
+    message(STATUS "Found ONNX Runtime via CMake package config.")
+ 
+    # Different distributions expose slightly different target names;
+    # normalize to a single alias we use everywhere below.
+    if(TARGET onnxruntime::onnxruntime)
+      # already the name we want
+    elseif(TARGET onnxruntime)
+      add_library(onnxruntime::onnxruntime ALIAS onnxruntime)
+    endif()
+ 
+  else()
+    # --- Step 2: explicit root dir (official prebuilt release archive) ---
+    if(NOT DEFINED ONNXRUNTIME_ROOT_DIR AND DEFINED ENV{ONNXRUNTIME_ROOT_DIR})
+      set(ONNXRUNTIME_ROOT_DIR "$ENV{ONNXRUNTIME_ROOT_DIR}")
+    endif()
+ 
+    if(DEFINED ONNXRUNTIME_ROOT_DIR)
+      message(STATUS "Looking for ONNX Runtime under ONNXRUNTIME_ROOT_DIR=${ONNXRUNTIME_ROOT_DIR}")
+      find_path(ONNXRUNTIME_INCLUDE_DIR
+        NAMES onnxruntime_cxx_api.h
+        PATHS "${ONNXRUNTIME_ROOT_DIR}/include"
+        NO_DEFAULT_PATH
+      )
+      find_library(ONNXRUNTIME_LIBRARY
+        NAMES onnxruntime
+        PATHS "${ONNXRUNTIME_ROOT_DIR}/lib"
+        NO_DEFAULT_PATH
+      )
+    else()
+      # --- Step 3: last-resort system search ---
+      find_path(ONNXRUNTIME_INCLUDE_DIR NAMES onnxruntime_cxx_api.h)
+      find_library(ONNXRUNTIME_LIBRARY NAMES onnxruntime)
+    endif()
+ 
+    if(ONNXRUNTIME_INCLUDE_DIR AND ONNXRUNTIME_LIBRARY)
+      message(STATUS "Found ONNX Runtime:")
+      message(STATUS "  include: ${ONNXRUNTIME_INCLUDE_DIR}")
+      message(STATUS "  library: ${ONNXRUNTIME_LIBRARY}")
+ 
+      add_library(onnxruntime::onnxruntime UNKNOWN IMPORTED)
+      set_target_properties(onnxruntime::onnxruntime PROPERTIES
+        IMPORTED_LOCATION "${ONNXRUNTIME_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_INCLUDE_DIR}"
+      )
+      set(onnxruntime_FOUND TRUE)
+    else()
+      message(FATAL_ERROR
+        "BUILD_ONNX_INFERENCE is ON but ONNX Runtime could not be found.\n"
+        "Either:\n"
+        "  (a) install it via a package manager that provides a CMake config "
+        "(vcpkg install onnxruntime, or Conan), or\n"
+        "  (b) download the official prebuilt release from "
+        "https://github.com/microsoft/onnxruntime/releases and set "
+        "ONNXRUNTIME_ROOT_DIR to the extracted folder (the one containing "
+        "include/ and lib/), e.g.:\n"
+        "    cmake -B build -S cpp -DBUILD_ONNX_INFERENCE=ON "
+        "-DONNXRUNTIME_ROOT_DIR=/path/to/onnxruntime-<platform>-<version>"
+      )
+    endif()
+  endif()
+
+  add_library(tanks_rl_inference STATIC
+    rl/rl-inference.cpp
+    # rl/rl-inference.hpp is header-only interface, doesn't need listing,
+    # but keeping it alongside for IDE visibility is fine:
+    # rl/rl-inference.hpp
+  )
+  # tanks_sim only publishes game/ as an include dir (see its own
+  # target_include_directories above) — it doesn't cover the cpp/ root
+  # that "rl/rl-inference.hpp"-style includes resolve against. Add it
+  # explicitly rather than relying on tanks_sim or tanks_rl for it.
+  target_include_directories(tanks_rl_inference PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  target_link_libraries(tanks_rl_inference
+    PUBLIC
+      tanks_sim
+    PRIVATE
+      onnxruntime::onnxruntime
+  )
+  target_compile_features(tanks_rl_inference PUBLIC cxx_std_17)
+
+  # --- Wire ONNX inference into the graphical client (--vs-rl mode) ---
+  # gs already links tanks_rl unconditionally (see BUILD_CLIENT block
+  # above); here we additionally link tanks_rl_inference and tell
+  # game/main.cpp (via GS_HAS_ONNX_INFERENCE) that it's safe to #include
+  # rl/rl-inference.hpp and compile the --vs-rl code path. Guarded by
+  # `if(TARGET gs)` since gs might not exist (BUILD_CLIENT=OFF, or raylib
+  # wasn't found even though BUILD_CLIENT=ON).
+  if(TARGET gs)
+    target_link_libraries(gs PRIVATE tanks_rl_inference)
+    target_compile_definitions(gs PRIVATE GS_HAS_ONNX_INFERENCE=1)
+
+    # Windows-only: onnxruntime.dll must sit next to gs.exe at runtime —
+    # static linking of tanks_rl_inference doesn't apply to ONNX Runtime's
+    # own shared library. Only wired up when we resolved ONNX Runtime via
+    # an explicit root dir (Step 2/3 above); if it came from a CMake
+    # package config (Step 1), that package is responsible for its own
+    # runtime deployment story and ONNXRUNTIME_ROOT_DIR won't be set here.
+    if(WIN32 AND DEFINED ONNXRUNTIME_ROOT_DIR)
+      add_custom_command(TARGET gs POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_ROOT_DIR}/lib/onnxruntime.dll"
+                "$<TARGET_FILE_DIR:gs>"
+        COMMENT "Copying onnxruntime.dll next to gs.exe"
+      )
+    endif()
+  else()
+    message(STATUS
+      "BUILD_ONNX_INFERENCE=ON but the gs target doesn't exist "
+      "(BUILD_CLIENT=OFF, or raylib wasn't found) — --vs-rl mode won't be "
+      "compiled into anything this run.")
+  endif()
+ 
+endif() # BUILD_ONNX_INFERENCE
 
 # --- Unit tests (headless sim + RL env; no third-party test framework) ---
 if(BUILD_TESTING)

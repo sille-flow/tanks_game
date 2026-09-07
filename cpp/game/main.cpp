@@ -1,8 +1,16 @@
 #include "sim/constants.hpp"
 #include "sim/court.hpp"
+#include "rl/rl-environment.hpp"
+
+#if defined(GS_HAS_ONNX_INFERENCE)
+#include "rl/rl-inference.hpp"
+#endif
 
 #include "raylib.h"
 
+#include <cstdio>
+#include <exception>
+#include <memory>
 #include <string>
 
 namespace {
@@ -11,6 +19,13 @@ constexpr int kHudHeight = 88;
 constexpr int kWindowWidth = tanks::COURT_WIDTH;
 constexpr int kWindowHeight = tanks::COURT_HEIGHT + kHudHeight;
 constexpr int kCourtOffsetY = kHudHeight;
+
+#if defined(GS_HAS_ONNX_INFERENCE)
+// Player 1 (arrows/BNM) always stays human-controlled, in both local coop
+// and --vs-rl mode, so the keys you already know don't change out from
+// under you. Player 2 (WASD/XCV) becomes the trained RL bot in --vs-rl mode.
+constexpr tanks::PlayerId kBotPlayer = tanks::PlayerId::Two;
+#endif
 
 Color player_color(tanks::PlayerId id) {
   return id == tanks::PlayerId::One ? Color{220, 60, 60, 255}
@@ -150,9 +165,10 @@ void draw_tank(const tanks::Tank& tank) {
   DrawRectangle(x, y + tank.height() + 2, bar_w, 4, RED);
 }
 
-void draw_hud(const tanks::Court& court) {
+void draw_hud(const tanks::Court& court, const char* mode_label,
+              const char* controls_label) {
   DrawRectangle(0, 0, kWindowWidth, kHudHeight, Color{28, 30, 36, 255});
-  DrawText("Local Coop", 12, 10, 18, RAYWHITE);
+  DrawText(mode_label, 12, 10, 18, RAYWHITE);
   DrawText(court.status().c_str(), 12, 34, 16, LIGHTGRAY);
 
   const int h1 = court.player1().health();
@@ -160,7 +176,7 @@ void draw_hud(const tanks::Court& court) {
   DrawText(TextFormat("P1 HP %d", h1), 12, 58, 14, Color{220, 60, 60, 255});
   DrawText(TextFormat("P2 HP %d", h2), 120, 58, 14, Color{60, 110, 220, 255});
   DrawText("R reset", 230, 58, 14, GRAY);
-  DrawText("P1: arrows B/N/M   P2: WASD X/C/V", 12, 74, 12, DARKGRAY);
+  DrawText(controls_label, 12, 74, 12, DARKGRAY);
 }
 
 void draw_court(const tanks::Court& court) {
@@ -179,11 +195,70 @@ void draw_court(const tanks::Court& court) {
   }
 }
 
+void print_usage(const char* argv0) {
+  std::printf(
+      "Usage:\n"
+      "  %s                       Local coop  (P1 arrows/BNM vs P2 WASD/XCV)\n"
+      "  %s --vs-rl <model.onnx>  Single player vs trained RL bot (P2)\n",
+      argv0, argv0);
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  std::string onnx_path;
+  bool vs_rl_requested = false;
+
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--vs-rl") {
+      vs_rl_requested = true;
+      if (i + 1 < argc) {
+        onnx_path = argv[++i];
+      }
+    } else if (arg == "--help" || arg == "-h") {
+      print_usage(argv[0]);
+      return 0;
+    }
+  }
+
+  if (vs_rl_requested && onnx_path.empty()) {
+    std::fprintf(stderr, "error: --vs-rl requires a path to a .onnx model\n");
+    print_usage(argv[0]);
+    return 1;
+  }
+
+#if defined(GS_HAS_ONNX_INFERENCE)
+  std::unique_ptr<tanks::RLPolicy> policy;
+  if (vs_rl_requested) {
+    try {
+      policy = std::make_unique<tanks::RLPolicy>(
+          onnx_path, tanks::RLEnvironment::OBSERVATION_SIZE,
+          tanks::RLEnvironment::ACTION_COUNT);
+    } catch (const std::exception& e) {
+      std::fprintf(stderr, "error: failed to load RL policy '%s': %s\n",
+                   onnx_path.c_str(), e.what());
+      return 1;
+    }
+  }
+#else
+  if (vs_rl_requested) {
+    std::fprintf(stderr,
+                 "error: this build wasn't compiled with ONNX inference "
+                 "support. Reconfigure with -DBUILD_ONNX_INFERENCE=ON "
+                 "(and -DONNXRUNTIME_ROOT_DIR=...) and rebuild.\n");
+    return 1;
+  }
+#endif
+
+  const char* mode_label =
+      vs_rl_requested ? "Single Player vs RL" : "Local Coop";
+  const char* controls_label = vs_rl_requested
+      ? "P1: arrows B/N/M   P2: trained RL bot"
+      : "P1: arrows B/N/M   P2: WASD X/C/V";
+
   SetTraceLogLevel(LOG_WARNING);
-  InitWindow(kWindowWidth, kWindowHeight, "Local Coop");
+  InitWindow(kWindowWidth, kWindowHeight, mode_label);
   SetTargetFPS(60);
 
   tanks::Court court;
@@ -196,7 +271,25 @@ int main() {
     }
 
     court.apply_input(tanks::PlayerId::One, read_player1_input());
+
+#if defined(GS_HAS_ONNX_INFERENCE)
+    if (vs_rl_requested) {
+      // Same observation encoding used at training time (see
+      // RLEnvironment::build_observation), just built directly off this
+      // Court instead of a training-time RLEnvironment wrapper — this game
+      // loop drives player 1 with human input and the scripted opponent
+      // never runs, so RLEnvironment::step()/scripted_opponent() aren't
+      // usable here.
+      const std::vector<float> observation =
+          tanks::RLEnvironment::build_observation(court, kBotPlayer);
+      const int action = policy->infer(observation);
+      court.apply_input(kBotPlayer, tanks::RLEnvironment::decode_action(action));
+    } else {
+      court.apply_input(tanks::PlayerId::Two, read_player2_input());
+    }
+#else
     court.apply_input(tanks::PlayerId::Two, read_player2_input());
+#endif
 
     accumulator_ms += GetFrameTime() * 1000.0;
     while (accumulator_ms >= tanks::TICK_MS) {
@@ -206,7 +299,7 @@ int main() {
 
     BeginDrawing();
     ClearBackground(Color{18, 18, 22, 255});
-    draw_hud(court);
+    draw_hud(court, mode_label, controls_label);
     draw_court(court);
     EndDrawing();
   }

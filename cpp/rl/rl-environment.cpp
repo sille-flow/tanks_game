@@ -37,6 +37,34 @@ float normalize_counter(int counter) {
   return clamp_float(static_cast<float>(counter) / 20.0f, 0.0f, 1.0f);
 }
 
+const Tank& tank_for(const Court& court, PlayerId id) {
+  return id == PlayerId::One ? court.player1() : court.player2();
+}
+
+PlayerId opponent_of(PlayerId id) {
+  return id == PlayerId::One ? PlayerId::Two : PlayerId::One;
+}
+
+// `agent` here is whichever tank the observation is being built for — NOT
+// always PlayerId::One. Bullet ownership is encoded relative to `agent`
+// (this tank's own bullets vs. the other tank's), so this must take
+// `agent` explicitly rather than assuming PlayerId::One like the original
+// single-perspective version did.
+void append_bullet_observation(std::vector<float>& observation,
+                                const Bullet& bullet,
+                                const Tank& reference_tank, PlayerId agent) {
+  const int relative_x = bullet.px() - reference_tank.px();
+  const int relative_y = bullet.py() - reference_tank.py();
+
+  observation.push_back(normalize_position_x(relative_x));
+  observation.push_back(normalize_position_y(relative_y));
+  observation.push_back(normalize_velocity(bullet.vx()));
+  observation.push_back(normalize_velocity(bullet.vy()));
+  observation.push_back(
+      static_cast<float>(static_cast<int>(bullet.type())) / 2.0f);
+  observation.push_back(bullet.owner() == agent ? 1.0f : -1.0f);
+}
+
 }  // namespace
 
 OpponentConfig OpponentConfig::for_difficulty(OpponentDifficulty difficulty) {
@@ -87,7 +115,8 @@ void RLEnvironment::reset() {
   opponent_ticks_ = 0;
 }
 
-PlayerInput RLEnvironment::decode_action(int action) const {
+// static
+PlayerInput RLEnvironment::decode_action(int action) {
   if (action < 0 || action >= ACTION_COUNT) {
     throw std::out_of_range("RL action must be between 0 and 71");
   }
@@ -182,47 +211,36 @@ float RLEnvironment::reward() const { return last_reward_; }
 
 bool RLEnvironment::done() const { return !court_.playing(); }
 
-void RLEnvironment::append_bullet_observation(
-    std::vector<float>& observation, const Bullet& bullet,
-    const Tank& reference_tank) const {
-  const int relative_x = bullet.px() - reference_tank.px();
-  const int relative_y = bullet.py() - reference_tank.py();
-
-  observation.push_back(normalize_position_x(relative_x));
-  observation.push_back(normalize_position_y(relative_y));
-  observation.push_back(normalize_velocity(bullet.vx()));
-  observation.push_back(normalize_velocity(bullet.vy()));
-  observation.push_back(
-      static_cast<float>(static_cast<int>(bullet.type())) / 2.0f);
-  observation.push_back(bullet.owner() == PlayerId::One ? 1.0f : -1.0f);
-}
-
-std::vector<float> RLEnvironment::observation() const {
-  const Tank& agent = court_.player1();
-  const Tank& opponent = court_.player2();
+// static
+std::vector<float> RLEnvironment::build_observation(const Court& court,
+                                                     PlayerId agent) {
+  const Tank& agent_tank = tank_for(court, agent);
+  const Tank& opponent_tank = tank_for(court, opponent_of(agent));
 
   std::vector<float> observation;
   observation.reserve(OBSERVATION_SIZE);
 
-  observation.push_back(normalize_position_x(agent.px()));
-  observation.push_back(normalize_position_y(agent.py()));
-  observation.push_back(normalize_velocity(agent.vx()));
-  observation.push_back(normalize_velocity(agent.vy()));
-  observation.push_back(static_cast<float>(agent.facing_x()));
-  observation.push_back(static_cast<float>(agent.facing_y()));
-  observation.push_back(normalize_health(agent.health()));
-  observation.push_back(normalize_counter(agent.ice_counter()));
-  observation.push_back(normalize_counter(agent.poison_counter()));
+  observation.push_back(normalize_position_x(agent_tank.px()));
+  observation.push_back(normalize_position_y(agent_tank.py()));
+  observation.push_back(normalize_velocity(agent_tank.vx()));
+  observation.push_back(normalize_velocity(agent_tank.vy()));
+  observation.push_back(static_cast<float>(agent_tank.facing_x()));
+  observation.push_back(static_cast<float>(agent_tank.facing_y()));
+  observation.push_back(normalize_health(agent_tank.health()));
+  observation.push_back(normalize_counter(agent_tank.ice_counter()));
+  observation.push_back(normalize_counter(agent_tank.poison_counter()));
 
-  observation.push_back(normalize_position_x(opponent.px() - agent.px()));
-  observation.push_back(normalize_position_y(opponent.py() - agent.py()));
-  observation.push_back(normalize_velocity(opponent.vx()));
-  observation.push_back(normalize_velocity(opponent.vy()));
-  observation.push_back(static_cast<float>(opponent.facing_x()));
-  observation.push_back(static_cast<float>(opponent.facing_y()));
-  observation.push_back(normalize_health(opponent.health()));
-  observation.push_back(normalize_counter(opponent.ice_counter()));
-  observation.push_back(normalize_counter(opponent.poison_counter()));
+  observation.push_back(
+      normalize_position_x(opponent_tank.px() - agent_tank.px()));
+  observation.push_back(
+      normalize_position_y(opponent_tank.py() - agent_tank.py()));
+  observation.push_back(normalize_velocity(opponent_tank.vx()));
+  observation.push_back(normalize_velocity(opponent_tank.vy()));
+  observation.push_back(static_cast<float>(opponent_tank.facing_x()));
+  observation.push_back(static_cast<float>(opponent_tank.facing_y()));
+  observation.push_back(normalize_health(opponent_tank.health()));
+  observation.push_back(normalize_counter(opponent_tank.ice_counter()));
+  observation.push_back(normalize_counter(opponent_tank.poison_counter()));
 
   struct BulletInfo {
     const Bullet* bullet;
@@ -230,20 +248,20 @@ std::vector<float> RLEnvironment::observation() const {
   };
 
   std::vector<BulletInfo> bullets;
-  for (const auto& bullet : agent.bullets()) {
+  for (const auto& bullet : agent_tank.bullets()) {
     if (!bullet) {
       continue;
     }
-    const float dx = static_cast<float>(bullet->px() - agent.px());
-    const float dy = static_cast<float>(bullet->py() - agent.py());
+    const float dx = static_cast<float>(bullet->px() - agent_tank.px());
+    const float dy = static_cast<float>(bullet->py() - agent_tank.py());
     bullets.push_back({bullet.get(), dx * dx + dy * dy});
   }
-  for (const auto& bullet : opponent.bullets()) {
+  for (const auto& bullet : opponent_tank.bullets()) {
     if (!bullet) {
       continue;
     }
-    const float dx = static_cast<float>(bullet->px() - agent.px());
-    const float dy = static_cast<float>(bullet->py() - agent.py());
+    const float dx = static_cast<float>(bullet->px() - agent_tank.px());
+    const float dy = static_cast<float>(bullet->py() - agent_tank.py());
     bullets.push_back({bullet.get(), dx * dx + dy * dy});
   }
 
@@ -255,13 +273,18 @@ std::vector<float> RLEnvironment::observation() const {
   constexpr int MAX_BULLETS = 4;
   for (int i = 0; i < MAX_BULLETS; ++i) {
     if (i < static_cast<int>(bullets.size())) {
-      append_bullet_observation(observation, *bullets[i].bullet, agent);
+      append_bullet_observation(observation, *bullets[i].bullet, agent_tank,
+                                agent);
     } else {
       observation.insert(observation.end(), 6, 0.0f);
     }
   }
 
   return observation;
+}
+
+std::vector<float> RLEnvironment::observation() const {
+  return build_observation(court_, PlayerId::One);
 }
 
 }  // namespace tanks
