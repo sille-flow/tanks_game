@@ -30,6 +30,7 @@ PYBIND11_MODULE(tanks_env_cpp, m) {
       .def(py::init<tanks::OpponentConfig>(), py::arg("opponent"),
            "Create env with a custom scripted opponent config.")
       .def("reset", &tanks::RLEnvironment::reset)
+      .def("random_reset", &tanks::RLEnvironment::random_reset, py::arg("seed"))
       .def("step", &tanks::RLEnvironment::step, py::arg("action"))
       .def("observation", &tanks::RLEnvironment::observation)
       .def("reward", &tanks::RLEnvironment::reward)

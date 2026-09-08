@@ -6,7 +6,7 @@ This is a tank-based game
 To compile the game for local co-op, run the following commands:
  - cmake -B build/build-client -S cpp -DCMAKE_BUILD_TYPE=Release
  - cmake --build build/build-client --target gs
- - build/build-client/bin/gs.exe
+ - bin/gs.exe
 
 To compile and run tests:
  - cmake -B build/build-tests -S cpp -DCMAKE_BUILD_TYPE=Release -DBUILD_CLIENT=OFF
@@ -29,4 +29,9 @@ To compile and train a model, ensure a python venv is active and run these comma
   - cd python
   - python rl-learning.py
   - *If on Windows, copy onnxruntime.dll from "your onnxruntime path"\lib\onnxruntime.dll into GameServer/bin*
-  - .\bin\gs.exe --vs-rl python\models\tanks_ppo.onnx
+  - bin\gs.exe --vs-rl python\models\tank_ppo.onnx
+  - *To get model and latency metrics, run the following*
+    - cmake --build build/build-inference --target bench-inference
+    - bin\bench-inference.exe python\models\tank_ppo.onnx
+    - cd python
+    - python evaluate_win_rate.py --model models/tank_ppo.zip --episodes 300 *--opponent-difficulty [Easy,Medium,Hard] --sample-actions*

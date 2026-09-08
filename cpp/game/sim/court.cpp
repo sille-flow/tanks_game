@@ -1,5 +1,5 @@
 #include "court.hpp"
-
+#include <random>
 #include <algorithm>
 
 namespace tanks {
@@ -13,6 +13,27 @@ void Court::reset() {
   playing_ = true;
   explosion_ = 5000;
   status_ = "Running...";
+}
+
+void Court::random_reset(int seed) {
+  std::mt19937 rng(seed);
+  reset();
+  std::uniform_int_distribution<int> x_dist(0, COURT_WIDTH - TANK_SIZE);
+  std::uniform_int_distribution<int> y_dist(0, COURT_HEIGHT - TANK_SIZE);
+  int x1 = x_dist(rng);
+  int y1 = y_dist(rng);
+  int x2 = x_dist(rng);
+  int y2 = y_dist(rng);
+  while (std::abs(x1 - x2) < MIN_TANK_DISTANCE || std::abs(y1 - y2) < MIN_TANK_DISTANCE) {
+    x1 = x_dist(rng);
+    y1 = y_dist(rng);
+    x2 = x_dist(rng);
+    y2 = y_dist(rng);
+  }
+  player1_->set_px(x1);
+  player1_->set_py(y1);
+  player2_->set_px(x2);
+  player2_->set_py(y2);
 }
 
 void Court::apply_input(PlayerId id, const PlayerInput& input) {

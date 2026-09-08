@@ -41,6 +41,7 @@ public:
       OpponentConfig opponent = OpponentConfig::for_difficulty(
           OpponentDifficulty::Medium));
 
+  void random_reset(int seed);
   void reset();
 
   /** Execute one simulation tick. Action must be in [0, ACTION_COUNT). */

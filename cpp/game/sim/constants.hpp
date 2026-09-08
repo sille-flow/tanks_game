@@ -13,6 +13,8 @@ constexpr int TANK_MAX_HEALTH = 100;
 constexpr int BULLET_SIZE = 20;
 constexpr int BULLET_SPEED = 8;
 
+constexpr int MIN_TANK_DISTANCE = 10;
+
 enum class Direction { None, Up, Down, Left, Right };
 
 enum class BulletType { Regular = 0, Ice = 1, Poison = 2 };

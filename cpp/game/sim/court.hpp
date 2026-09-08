@@ -19,6 +19,7 @@ public:
   Court();
 
   void reset();
+  void random_reset(int seed);
   void apply_input(PlayerId id, const PlayerInput& input);
   void tick();
 

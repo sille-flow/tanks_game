@@ -47,7 +47,11 @@ class TankEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        self.cpp_env.reset()
+        if seed is None:
+            self.cpp_env.reset()
+        else:
+            seed = int(seed)
+            self.cpp_env.random_reset(seed)
         self.steps = 0
         return self._get_observation(), {}
 

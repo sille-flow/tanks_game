@@ -107,6 +107,14 @@ void RLEnvironment::set_opponent_config(OpponentConfig config) {
   opponent_config_ = config;
 }
 
+void RLEnvironment::random_reset(int seed) {
+    court_.random_reset(seed);
+    last_reward_ = 0.0f;
+    previous_enemy_health_ = court_.player2().health();
+    previous_self_health_ = court_.player1().health();
+    opponent_ticks_ = 0;
+}
+
 void RLEnvironment::reset() {
   court_.reset();
   last_reward_ = 0.0f;

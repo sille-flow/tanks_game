@@ -266,6 +266,9 @@ if(BUILD_ONNX_INFERENCE)
   )
   target_compile_features(tanks_rl_inference PUBLIC cxx_std_17)
 
+  add_executable(bench-inference rl/bench-inference.cpp)
+  target_link_libraries(bench-inference PRIVATE tanks_rl tanks_rl_inference)
+
   # --- Wire ONNX inference into the graphical client (--vs-rl mode) ---
   # gs already links tanks_rl unconditionally (see BUILD_CLIENT block
   # above); here we additionally link tanks_rl_inference and tell
